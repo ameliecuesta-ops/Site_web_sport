@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -9,6 +9,29 @@ export default function UpdatePasswordPage() {
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
+  const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    const handlePasswordRecovery = async () => {
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code)
+        if (!error) {
+          setReady(true)
+        } else {
+          setMessage(`Erreur de lien : ${error.message}`)
+        }
+      } else {
+        // Vérifier si une session existe déjà
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session) setReady(true)
+      }
+    }
+
+    handlePasswordRecovery()
+  }, [])
 
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault()

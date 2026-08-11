@@ -8,7 +8,8 @@ export default function LoginPage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login')
+  const [token, setToken] = useState('')
+  const [mode, setMode] = useState<'login' | 'signup' | 'verify' | 'reset'>('login')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -19,9 +20,30 @@ export default function LoginPage() {
 
     try {
       if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({ email, password })
-        if (error) setMessage(`Erreur : ${error.message}`)
-        else setMessage('Compte créé ! Tu peux maintenant te connecter.')
+        const { error } = await supabase.auth.signUp({ 
+          email, 
+          password,
+          options: { emailRedirectTo: window.location.origin }
+        })
+        if (error) {
+          setMessage(`Erreur : ${error.message}`)
+        } else {
+          setMode('verify')
+          setMessage('Un code de validation a été envoyé par e-mail.')
+        }
+      } else if (mode === 'verify') {
+        const { error } = await supabase.auth.verifyOtp({
+          email,
+          token,
+          type: 'signup'
+        })
+        if (error) {
+          setMessage(`Erreur : ${error.message}`)
+        } else {
+          setMessage('Compte vérifié avec succès ! Connexion en cours...')
+          router.push('/')
+          router.refresh()
+        }
       } else if (mode === 'login') {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) {
@@ -70,29 +92,53 @@ export default function LoginPage() {
         </h1>
         <p style={{ color: '#8b9bb4', fontSize: '0.9rem', marginBottom: '2rem' }}>
           {mode === 'signup' && "Créer un nouveau compte"}
+          {mode === 'verify' && "Entre le code reçu par e-mail"}
           {mode === 'login' && "Connecte-toi pour jouer"}
           {mode === 'reset' && "Réinitialiser ton mot de passe"}
         </p>
 
         <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-          <input 
-            type="email" 
-            placeholder="Adresse e-mail" 
-            value={email} 
-            onChange={(e) => setEmail(e.target.value)} 
-            required 
-            style={{
-              padding: '0.8rem 1rem',
-              borderRadius: '6px',
-              border: '1px solid #1e2942',
-              backgroundColor: '#0b1329',
-              color: 'white',
-              fontSize: '1rem',
-              outline: 'none'
-            }}
-          />
+          {mode !== 'verify' && (
+            <input 
+              type="email" 
+              placeholder="Adresse e-mail" 
+              value={email} 
+              onChange={(e) => setEmail(e.target.value)} 
+              required 
+              style={{
+                padding: '0.8rem 1rem',
+                borderRadius: '6px',
+                border: '1px solid #1e2942',
+                backgroundColor: '#0b1329',
+                color: 'white',
+                fontSize: '1rem',
+                outline: 'none'
+              }}
+            />
+          )}
 
-          {mode !== 'reset' && (
+          {mode === 'verify' && (
+            <input 
+              type="text" 
+              placeholder="Code à 6 chiffres" 
+              value={token} 
+              onChange={(e) => setToken(e.target.value)} 
+              required 
+              style={{
+                padding: '0.8rem 1rem',
+                borderRadius: '6px',
+                border: '1px solid #1e2942',
+                backgroundColor: '#0b1329',
+                color: 'white',
+                fontSize: '1.2rem',
+                textAlign: 'center',
+                letterSpacing: '4px',
+                outline: 'none'
+              }}
+            />
+          )}
+
+          {mode !== 'reset' && mode !== 'verify' && (
             <input 
               type="password" 
               placeholder="Mot de passe" 
@@ -128,6 +174,7 @@ export default function LoginPage() {
           >
             {loading ? 'Chargement...' : (
               mode === 'signup' ? "S'inscrire" : 
+              mode === 'verify' ? "Valider le code" :
               mode === 'login' ? "Se connecter" : 
               "Envoyer le lien"
             )}
@@ -148,7 +195,6 @@ export default function LoginPage() {
           </p>
         )}
 
-        {/* Liens de bas de page */}
         <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {mode === 'login' && (
             <>
@@ -169,7 +215,7 @@ export default function LoginPage() {
             </>
           )}
 
-          {(mode === 'signup' || mode === 'reset') && (
+          {(mode === 'signup' || mode === 'reset' || mode === 'verify') && (
             <button 
               type="button"
               onClick={() => { setMode('login'); setMessage(''); }} 

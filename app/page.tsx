@@ -27,10 +27,19 @@ interface Message {
 }
 
 export default function HomePage() {
+  const [selectedCode, setSelectedCode] = useState<string | null>(null)
+  const [joinPassword, setJoinPassword] = useState('')
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [squad, setSquad] = useState<SquadData | null>(null)
+  const weeklyMissions = [
+  { id: 1, sport: 'Course à pied', km: '5 km', time: '30 min', points: 300, week: 'Semaine 1' },
+  { id: 2, sport: 'Vélo', km: '10 km', time: '1 h', points: 400, week: 'Semaine 1' },
+  { id: 3, sport: 'Natation', km: '500 m', time: '30 min', points: 500, week: 'Semaine 1' },
+  { id: 4, sport: 'Marche', km: '10 000 pas', time: '-', points: 1000, week: 'Semaine 1' },
+  ];
+
 
   // Profil Utilisateur
   const [displayName, setDisplayName] = useState<string>('')
@@ -55,119 +64,118 @@ export default function HomePage() {
   const [squadNameInput, setSquadNameInput] = useState('')
   const [squadCodeInput, setSquadCodeInput] = useState('')
 
+  // Charger les données utilisateur et l'équipe au démarrage
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
         router.push('/login')
-      } else {
-        setUser(session.user)
-        
-        // Charger l'équipe
-        const savedSquad = localStorage.getItem(`squad_${session.user.id}`)
-        if (savedSquad) {
-          const parsedSquad: SquadData = JSON.parse(savedSquad)
-          setSquad(parsedSquad)
-
-          // Charger les groupes du chat
-          const savedGroups = localStorage.getItem(`chat_groups_${parsedSquad.code}`)
-          let currentGroups: Group[] = []
-          if (savedGroups) {
-            currentGroups = JSON.parse(savedGroups)
-          } else {
-            // Groupe principal par défaut = nom de l'équipe
-            currentGroups = [{ id: 'general', name: parsedSquad.name }]
-            localStorage.setItem(`chat_groups_${parsedSquad.code}`, JSON.stringify(currentGroups))
-          }
-          setGroups(currentGroups)
-          setActiveGroupId(currentGroups[0]?.id || 'general')
-
-          // Charger tous les messages
-          const savedMessages = localStorage.getItem(`chat_messages_${parsedSquad.code}`)
-          if (savedMessages) setMessages(JSON.parse(savedMessages))
-        }
-
-        // Charger le pseudo
-        const savedName = localStorage.getItem(`displayName_${session.user.id}`)
-        const defaultName = session.user.email?.split('@')[0] || 'Joueur'
-        setDisplayName(savedName || defaultName)
-
-        // Charger la photo de profil
-        const savedAvatar = localStorage.getItem(`avatar_${session.user.id}`)
-        if (savedAvatar) setAvatarUrl(savedAvatar)
+        return
       }
+      
+      setUser(session.user)
+      
+      // Charger l'équipe (stockée en local pour la persistance simple)
+      const savedSquad = localStorage.getItem(`squad_${session.user.id}`)
+      if (savedSquad) {
+        const parsedSquad = JSON.parse(savedSquad)
+        setSquad(parsedSquad)
+
+        // Charger les groupes du chat en local
+        const savedGroups = localStorage.getItem(`chat_groups_${parsedSquad.code}`)
+        if (savedGroups) {
+          const parsedGroups = JSON.parse(savedGroups)
+          setGroups(parsedGroups)
+          setActiveGroupId(parsedGroups[0]?.id || 'general')
+        } else {
+          const initialGroups: Group[] = [{ id: 'general', name: parsedSquad.name }]
+          setGroups(initialGroups)
+          setActiveGroupId('general')
+          localStorage.setItem(`chat_groups_${parsedSquad.code}`, JSON.stringify(initialGroups))
+        }
+      }
+
+      // Charger le pseudo et l'avatar
+      const savedName = localStorage.getItem(`displayName_${session.user.id}`)
+      setDisplayName(savedName || session.user.email?.split('@')[0] || 'Joueur')
+      
+      const savedAvatar = localStorage.getItem(`avatar_${session.user.id}`)
+      if (savedAvatar) setAvatarUrl(savedAvatar)
+      
       setLoading(false)
     }
-
     checkUser()
   }, [router])
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
-  }
+  // Charger les messages et écouter en temps réel
+  useEffect(() => {
+    if (!squad) return
 
-  // Changer le pseudo
-  const handleSaveName = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!tempName.trim() || !user) return
-    localStorage.setItem(`displayName_${user.id}`, tempName.trim())
-    setDisplayName(tempName.trim())
-    setIsEditingName(false)
-  }
+    const fetchMessages = async () => {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('squad_code', squad.code)
+        .order('created_at', { ascending: true })
 
-  // Uploader / Changer la photo de profil
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file && user) {
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        const base64Image = reader.result as string
-        setAvatarUrl(base64Image)
-        localStorage.setItem(`avatar_${user.id}`, base64Image)
+      if (!error && data) {
+        setMessages(data.map((m: any) => ({
+          id: m.id.toString(),
+          groupId: m.group_id,
+          senderId: m.sender_id,
+          senderName: m.sender_name,
+          senderAvatar: m.sender_avatar,
+          text: m.text,
+          createdAt: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        })))
       }
-      reader.readAsDataURL(file)
     }
-  }
 
-  const handleCreateSquad = (e: React.FormEvent) => {
+    fetchMessages()
+
+    const channel = supabase
+      .channel('public:messages')
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'messages'
+      }, (payload) => {
+        const newItem = payload.new as any
+        if (newItem.squad_code === squad.code) {
+          const formattedMsg: Message = {
+            id: newItem.id.toString(),
+            groupId: newItem.group_id,
+            senderId: newItem.sender_id,
+            senderName: newItem.sender_name,
+            senderAvatar: newItem.sender_avatar,
+            text: newItem.text,
+            createdAt: new Date(newItem.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+          setMessages((prev) => [...prev, formattedMsg])
+        }
+      })
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [squad])
+
+  // Envoyer un message via Supabase
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!squadNameInput.trim() || !user) return
+    if (!newMessage.trim() || !user || !squad || !activeGroupId) return
 
-    const generatedCode = 'SQ-' + Math.random().toString(36).substring(2, 6).toUpperCase()
-    const squadData: SquadData = { name: squadNameInput.trim(), code: generatedCode, isAdmin: true }
+    const { error } = await supabase.from('messages').insert([
+      {
+        group_id: activeGroupId,
+        squad_code: squad.code,
+        sender_id: user.id,
+        sender_name: displayName,
+        sender_avatar: avatarUrl,
+        text: newMessage.trim()
+      }
+    ])
 
-    localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
-    setSquad(squadData)
-
-    // Initialiser le premier groupe avec le nom de l'équipe
-    const initialGroups: Group[] = [{ id: 'general', name: squadData.name }]
-    setGroups(initialGroups)
-    setActiveGroupId('general')
-    localStorage.setItem(`chat_groups_${squadData.code}`, JSON.stringify(initialGroups))
-  }
-
-  const handleJoinSquad = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!squadCodeInput.trim() || !user) return
-
-    const squadName = 'Équipe ' + squadCodeInput.toUpperCase()
-    const squadData: SquadData = { name: squadName, code: squadCodeInput.toUpperCase(), isAdmin: false }
-    localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
-    setSquad(squadData)
-
-    // Initialiser le premier groupe avec le nom de l'équipe si non existant
-    const savedGroups = localStorage.getItem(`chat_groups_${squadData.code}`)
-    if (savedGroups) {
-      const parsed = JSON.parse(savedGroups)
-      setGroups(parsed)
-      setActiveGroupId(parsed[0]?.id || 'general')
-    } else {
-      const initialGroups: Group[] = [{ id: 'general', name: squadData.name }]
-      setGroups(initialGroups)
-      setActiveGroupId('general')
-      localStorage.setItem(`chat_groups_${squadData.code}`, JSON.stringify(initialGroups))
-    }
+    if (!error) setNewMessage('')
   }
 
   // Créer un nouveau groupe dans le chat
@@ -187,30 +195,55 @@ export default function HomePage() {
     setShowNewGroupInput(false)
   }
 
-  // Envoyer un message dans le groupe actif
-  const handleSendMessage = (e: React.FormEvent) => {
+  // Fonctions de gestion d'équipe
+  const handleCreateSquad = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessage.trim() || !user || !squad || !activeGroupId) return
+    if (!squadNameInput.trim() || !user) return
 
-    const msgObj: Message = {
-      id: Date.now().toString(),
-      groupId: activeGroupId,
-      senderId: user.id,
-      senderName: displayName,
-      senderAvatar: avatarUrl,
-      text: newMessage.trim(),
-      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    const generatedCode = ('SQ-' + Math.random().toString(36).substring(2, 6)).toUpperCase()
+    const squadData: SquadData = { name: squadNameInput.trim(), code: generatedCode, isAdmin: true }
+
+    localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
+    setSquad(squadData)
+
+    const initialGroups: Group[] = [{ id: 'general', name: squadData.name }]
+    setGroups(initialGroups)
+    setActiveGroupId('general')
+    localStorage.setItem(`chat_groups_${squadData.code}`, JSON.stringify(initialGroups))
+  }
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
+
+  const handleSaveName = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!tempName.trim() || !user) return
+    localStorage.setItem(`displayName_${user.id}`, tempName.trim())
+    setDisplayName(tempName.trim())
+    setIsEditingName(false)
+  }
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && user) {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        const base64Image = reader.result as string
+        setAvatarUrl(base64Image)
+        localStorage.setItem(`avatar_${user.id}`, base64Image)
+      }
+      reader.readAsDataURL(file)
     }
-
-    const updatedMessages = [...messages, msgObj]
-    setMessages(updatedMessages)
-    localStorage.setItem(`chat_messages_${squad.code}`, JSON.stringify(updatedMessages))
-    setNewMessage('')
   }
 
   const currentGroupMessages = messages.filter((m) => m.groupId === activeGroupId)
+  const groupMembers = Array.from(new Set(currentGroupMessages.map(m => m.senderId)))
+  .map(id => currentGroupMessages.find(m => m.senderId === id))
+  .filter(Boolean) as Message[];
 
-  if (loading) return <div style={containerStyle}><p style={{ color: '#8b9bb4' }}>Chargement...</p></div>
+  if (loading) return <div style={containerStyle}><p style={{ color: '#8b9bb4', textAlign: 'center', marginTop: '2rem' }}>Chargement...</p></div>
 
   // Étape 1 : Choix ou création d'équipe
   if (!squad) {
@@ -221,35 +254,78 @@ export default function HomePage() {
           <button onClick={handleLogout} style={logoutButtonStyle}>Déconnexion</button>
         </header>
 
-        <main style={{ maxWidth: '400px', margin: '3rem auto', padding: '0 1rem' }}>
-          <div style={cardStyle}>
-            {action === 'choice' && (
-              <>
-                <h2 style={{ color: '#ffcc00', marginTop: 0, textAlign: 'center' }}>Créer ou Rejoindre</h2>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
-                  <button onClick={() => setAction('create')} style={primaryBtnStyle}>Créer une équipe</button>
-                  <button onClick={() => setAction('join')} style={secondaryBtnStyle}>Rejoindre une équipe</button>
+        <main style={{ maxWidth: '850px', margin: '3rem auto', padding: '0 1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+            <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+              <h2 style={{ color: '#ffcc00', marginTop: 0 }}>Créer une équipe</h2>
+              <form onSubmit={handleCreateSquad} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem', width: '100%' }}>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Les Warriors" 
+                  value={squadNameInput} 
+                  onChange={(e) => setSquadNameInput(e.target.value)} 
+                  required 
+                  style={inputStyle} 
+                />
+                <button type="submit" style={primaryBtnStyle}>Créer & Entrer</button>
+              </form>
+            </div>
+
+            <div style={cardStyle}>
+              <h2 style={{ color: '#ffcc00', marginTop: 0, textAlign: 'center' }}>Rejoindre une équipe</h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
+                <span style={{ fontSize: '0.8rem', color: '#8b9bb4' }}>Équipes existantes :</span>
+                <div style={{ maxHeight: '250px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                  {Object.keys(localStorage)
+                    .filter((key) => key.startsWith('squad_'))
+                    .map((key) => {
+                      const data = JSON.parse(localStorage.getItem(key) || '{}')
+                      const isSelected = selectedCode === key
+
+                      return (
+                        <div key={key} style={{ backgroundColor: '#0b1329', padding: '0.8rem', borderRadius: '6px', border: '1px solid #1e2942', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: 'white', fontWeight: 'bold' }}>{data.name}</span>
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                setSelectedCode(isSelected ? null : key)
+                                setJoinPassword('')
+                              }} 
+                              style={{ ...secondaryBtnStyle, padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                            >
+                              {isSelected ? 'Annuler' : 'Rejoindre'}
+                            </button>
+                          </div>
+
+                          {isSelected && (
+                            <form onSubmit={(e) => {
+                              e.preventDefault()
+                              if (joinPassword.trim().toUpperCase() === data.code.toUpperCase()) {
+                                const squadData = { ...data, isAdmin: false }
+                                localStorage.setItem(`squad_${user?.id}`, JSON.stringify(squadData))
+                                setSquad(squadData)
+                              } else {
+                                alert("Code incorrect !")
+                              }
+                            }} style={{ marginTop: '0.8rem', display: 'flex', gap: '0.5rem' }}>
+                              <input 
+                                type="text"
+                                inputMode="text"
+                                placeholder="Code secret" 
+                                value={joinPassword}
+                                onChange={(e) => setJoinPassword(e.target.value)}
+                                style={{ ...inputStyle, padding: '0.4rem', flex: 1 }}
+                              />
+                              <button type="submit" style={primaryBtnStyle}>OK</button>
+                            </form>
+                          )}
+                        </div>
+                      )
+                    })}
                 </div>
-              </>
-            )}
-
-            {action === 'create' && (
-              <form onSubmit={handleCreateSquad} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <h3 style={{ color: 'white', marginTop: 0, textAlign: 'center' }}>Nom de l'équipe</h3>
-                <input type="text" placeholder="Ex: Les Warriors" value={squadNameInput} onChange={(e) => setSquadNameInput(e.target.value)} required style={inputStyle} />
-                <button type="submit" style={primaryBtnStyle}>Valider & Entrer</button>
-                <button type="button" onClick={() => setAction('choice')} style={linkBtnStyle}>Retour</button>
-              </form>
-            )}
-
-            {action === 'join' && (
-              <form onSubmit={handleJoinSquad} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <h3 style={{ color: 'white', marginTop: 0, textAlign: 'center' }}>Code de l'équipe</h3>
-                <input type="text" placeholder="Ex: SQ-8F3A" value={squadCodeInput} onChange={(e) => setSquadCodeInput(e.target.value)} required style={inputStyle} />
-                <button type="submit" style={primaryBtnStyle}>Rejoindre</button>
-                <button type="button" onClick={() => setAction('choice')} style={linkBtnStyle}>Retour</button>
-              </form>
-            )}
+              </div>
+            </div>
           </div>
         </main>
       </div>
@@ -293,15 +369,52 @@ export default function HomePage() {
 
         {/* 2. MISSIONS */}
         {activeTab === 'missions' && (
-          <div style={cardStyle}>
-            <h2 style={{ color: '#ffcc00', marginTop: 0 }}>Missions d'Équipe</h2>
-            <p style={{ color: '#8b9bb4' }}>Les objectifs et défis à réaliser s'afficheront ici.</p>
+          <div style={{ ...cardStyle, padding: '1.5rem', backgroundColor: '#0b1329', color: 'white' }}>
+            <h3 style={{ color: '#ffcc00', marginBottom: '1rem', fontSize: '1.1rem' }}>🏆 Missions de la semaine</h3>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {weeklyMissions.map((mission) => (
+                <div 
+                  key={mission.id} 
+                  style={{ 
+                    backgroundColor: '#131c35', 
+                    border: '1px solid #1e2942', 
+                    borderRadius: '8px', 
+                    padding: '0.8rem 1rem',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                >
+                  <div>
+                    <h4 style={{ margin: '0 0 0.3rem 0', color: '#ffcc00', fontSize: '0.95rem' }}>{mission.sport}</h4>
+                    <p style={{ margin: 0, fontSize: '0.8rem', color: '#8b9bb4' }}>
+                      {mission.km} {mission.time !== '-' ? `• ${mission.time}` : ''}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <span style={{ fontWeight: 'bold', color: '#ffcc00', fontSize: '0.95rem' }}>
+                      +{mission.points} pts
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
         {/* 3. CHAT */}
         {activeTab === 'chat' && (
-          <div style={{ ...cardStyle, padding: 0, overflow: 'hidden', height: '450px', display: 'flex', position: 'relative' }}>
+          <div style={{ 
+            ...cardStyle, 
+            padding: 0, 
+            overflow: 'hidden', 
+            height: 'auto', // Changez 450px pour auto afin que ça s'adapte
+            minHeight: '450px',
+            display: 'flex', 
+            flexDirection: window.innerWidth < 768 ? 'column' : 'row', // Force la colonne sur mobile
+            position: 'relative' 
+          }}>
             {/* Barre latérale des groupes */}
             <aside style={{ width: '160px', backgroundColor: '#0b1329', borderRight: '1px solid #1e2942', display: 'flex', flexDirection: 'column' }}>
               <div style={{ padding: '0.8rem', borderBottom: '1px solid #1e2942', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -361,7 +474,6 @@ export default function HomePage() {
                 <h3 style={{ margin: 0, color: '#ffcc00', fontSize: '1rem' }}>
                   # {groups.find((g) => g.id === activeGroupId)?.name || squad.name}
                 </h3>
-                {/* Bouton 3 petits points */}
                 <button
                   onClick={() => setShowGroupMembers(!showGroupMembers)}
                   style={{ background: 'none', border: 'none', color: '#ffcc00', fontSize: '1.2rem', cursor: 'pointer', padding: '0 4px', letterSpacing: '2px' }}
@@ -371,27 +483,28 @@ export default function HomePage() {
                 </button>
               </header>
 
-              {/* Volet déroulant Membres du groupe */}
               {showGroupMembers && (
                 <div style={{ position: 'absolute', top: '45px', right: '10px', width: '200px', backgroundColor: '#0b1329', border: '1px solid #ffcc00', borderRadius: '8px', padding: '0.8rem', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem', borderBottom: '1px solid #1e2942', paddingBottom: '0.4rem' }}>
                     <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'white' }}>MEMBRES DU GROUPE</span>
                     <button onClick={() => setShowGroupMembers(false)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '0.8rem' }}>✕</button>
                   </div>
+                  
+                  {/* Conteneur unique pour la liste */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', overflow: 'hidden', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center', border: '1px solid #ffcc00' }}>
-                        {avatarUrl ? <img src={avatarUrl} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: '0.6rem' }}>👤</span>}
+                    {groups.find(g => g.id === activeGroupId)?.members?.map((member) => (
+                      <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                          👤
+                        </div>
+                        <span style={{ color: 'white', fontSize: '0.8rem' }}>{member.name}</span>
                       </div>
-                      <span style={{ color: 'white', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                        {displayName} {squad.isAdmin ? '(Admin)' : '(Moi)'}
-                      </span>
-                    </div>
+                    ))}
                   </div>
                 </div>
               )}
 
-              <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', backgroundColor: '#ffffff' }}>
                 {currentGroupMessages.length === 0 ? (
                   <p style={{ color: '#8b9bb4', fontSize: '0.85rem', textAlign: 'center', margin: 'auto' }}>Aucun message dans ce groupe. Écris le premier !</p>
                 ) : (
@@ -412,7 +525,6 @@ export default function HomePage() {
                         >
                           {msg.text}
                         </div>
-                        {/* Nom sous le message */}
                         <span style={{ fontSize: '0.7rem', color: '#8b9bb4', marginTop: '3px', padding: '0 2px' }}>
                           {msg.senderName} • {msg.createdAt}
                         </span>
@@ -441,7 +553,6 @@ export default function HomePage() {
           <div style={cardStyle}>
             <h2 style={{ color: '#ffcc00', marginTop: 0 }}>Profil & Équipe</h2>
             
-            {/* AVATAR + IMPORTATION PHOTO */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
               <div style={avatarLargeStyle}>
                 {avatarUrl ? <img src={avatarUrl} alt="Avatar" style={avatarImgStyle} /> : <span style={{ fontSize: '2.5rem' }}>👤</span>}
@@ -453,8 +564,6 @@ export default function HomePage() {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              
-              {/* PSEUDO */}
               <div>
                 <span style={statTitleStyle}>SURNOM / PSEUDO</span>
                 {isEditingName ? (
@@ -557,9 +666,6 @@ const linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', 
 const inputStyle: React.CSSProperties = { padding: '0.8rem', borderRadius: '6px', border: '1px solid #1e2942', backgroundColor: '#0b1329', color: 'white' }
 const bottomNavStyle: React.CSSProperties = { position: 'fixed', bottom: 0, left: 0, right: 0, height: '60px', backgroundColor: '#131c35', borderTop: '1px solid #1e2942', display: 'flex', justifyContent: 'space-around', alignItems: 'center', zIndex: 10 }
 const navBtnStyle: React.CSSProperties = { background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', gap: '2px' }
-
-// Styles Avatar
 const avatarLargeStyle: React.CSSProperties = { width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#0b1329', border: '2px solid #ffcc00', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }
-const avatarCircleStyle: React.CSSProperties = { width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#0b1329', border: '1px solid #ffcc00', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }
 const avatarImgStyle: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' }
 const uploadBtnStyle: React.CSSProperties = { fontSize: '0.75rem', color: '#ffcc00', cursor: 'pointer', textDecoration: 'underline', marginTop: '0.2rem' }
