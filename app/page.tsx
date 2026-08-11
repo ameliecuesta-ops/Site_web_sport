@@ -11,9 +11,15 @@ interface SquadData {
   isAdmin: boolean
 }
 
+interface Member {
+  id: string
+  name: string
+}
+
 interface Group {
   id: string
   name: string
+  members?: Member[]
 }
 
 interface Message {
@@ -34,23 +40,19 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true)
   const [squad, setSquad] = useState<SquadData | null>(null)
   const weeklyMissions = [
-  { id: 1, sport: 'Course à pied', km: '5 km', time: '30 min', points: 300, week: 'Semaine 1' },
-  { id: 2, sport: 'Vélo', km: '10 km', time: '1 h', points: 400, week: 'Semaine 1' },
-  { id: 3, sport: 'Natation', km: '500 m', time: '30 min', points: 500, week: 'Semaine 1' },
-  { id: 4, sport: 'Marche', km: '10 000 pas', time: '-', points: 1000, week: 'Semaine 1' },
+    { id: 1, sport: 'Course à pied', km: '5 km', time: '30 min', points: 300, week: 'Semaine 1' },
+    { id: 2, sport: 'Vélo', km: '10 km', time: '1 h', points: 400, week: 'Semaine 1' },
+    { id: 3, sport: 'Natation', km: '500 m', time: '30 min', points: 500, week: 'Semaine 1' },
+    { id: 4, sport: 'Marche', km: '10 000 pas', time: '-', points: 1000, week: 'Semaine 1' },
   ];
 
-
-  // Profil Utilisateur
   const [displayName, setDisplayName] = useState<string>('')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [isEditingName, setIsEditingName] = useState<boolean>(false)
   const [tempName, setTempName] = useState<string>('')
 
-  // Navigation : 'podium', 'missions', 'chat', 'profile'
   const [activeTab, setActiveTab] = useState<'podium' | 'missions' | 'chat' | 'profile'>('podium')
 
-  // Chat State : Groupes, Messages & Modal Membres
   const [groups, setGroups] = useState<Group[]>([])
   const [activeGroupId, setActiveGroupId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
@@ -59,12 +61,9 @@ export default function HomePage() {
   const [newGroupName, setNewGroupName] = useState('')
   const [showGroupMembers, setShowGroupMembers] = useState(false)
 
-  // Onboarding
   const [action, setAction] = useState<'choice' | 'create' | 'join'>('choice')
   const [squadNameInput, setSquadNameInput] = useState('')
-  const [squadCodeInput, setSquadCodeInput] = useState('')
 
-  // Charger les données utilisateur et l'équipe au démarrage
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -75,13 +74,11 @@ export default function HomePage() {
       
       setUser(session.user)
       
-      // Charger l'équipe (stockée en local pour la persistance simple)
       const savedSquad = localStorage.getItem(`squad_${session.user.id}`)
       if (savedSquad) {
         const parsedSquad = JSON.parse(savedSquad)
         setSquad(parsedSquad)
 
-        // Charger les groupes du chat en local
         const savedGroups = localStorage.getItem(`chat_groups_${parsedSquad.code}`)
         if (savedGroups) {
           const parsedGroups = JSON.parse(savedGroups)
@@ -95,7 +92,6 @@ export default function HomePage() {
         }
       }
 
-      // Charger le pseudo et l'avatar
       const savedName = localStorage.getItem(`displayName_${session.user.id}`)
       setDisplayName(savedName || session.user.email?.split('@')[0] || 'Joueur')
       
@@ -107,7 +103,6 @@ export default function HomePage() {
     checkUser()
   }, [router])
 
-  // Charger les messages et écouter en temps réel
   useEffect(() => {
     if (!squad) return
 
@@ -159,7 +154,6 @@ export default function HomePage() {
     return () => { supabase.removeChannel(channel) }
   }, [squad])
 
-  // Envoyer un message via Supabase
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newMessage.trim() || !user || !squad || !activeGroupId) return
@@ -178,7 +172,6 @@ export default function HomePage() {
     if (!error) setNewMessage('')
   }
 
-  // Créer un nouveau groupe dans le chat
   const handleCreateGroup = (e: React.FormEvent) => {
     e.preventDefault()
     if (!newGroupName.trim() || !squad) return
@@ -195,7 +188,6 @@ export default function HomePage() {
     setShowNewGroupInput(false)
   }
 
-  // Fonctions de gestion d'équipe
   const handleCreateSquad = (e: React.FormEvent) => {
     e.preventDefault()
     if (!squadNameInput.trim() || !user) return
@@ -239,13 +231,9 @@ export default function HomePage() {
   }
 
   const currentGroupMessages = messages.filter((m) => m.groupId === activeGroupId)
-  const groupMembers = Array.from(new Set(currentGroupMessages.map(m => m.senderId)))
-  .map(id => currentGroupMessages.find(m => m.senderId === id))
-  .filter(Boolean) as Message[];
 
   if (loading) return <div style={containerStyle}><p style={{ color: '#8b9bb4', textAlign: 'center', marginTop: '2rem' }}>Chargement...</p></div>
 
-  // Étape 1 : Choix ou création d'équipe
   if (!squad) {
     return (
       <div style={containerStyle}>
@@ -332,7 +320,6 @@ export default function HomePage() {
     )
   }
 
-  // Étape 2 : Interface principale
   return (
     <div style={containerStyle}>
       <header style={headerStyle}>
@@ -342,7 +329,6 @@ export default function HomePage() {
 
       <main style={{ maxWidth: '700px', margin: '1rem auto 5rem auto', padding: '0 1rem' }}>
         
-        {/* 1. PODIUM */}
         {activeTab === 'podium' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             <h2 style={{ color: 'white', textAlign: 'center', margin: '0.5rem 0' }}>PODIUM DE L'ÉQUIPE</h2>
@@ -367,7 +353,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* 2. MISSIONS */}
         {activeTab === 'missions' && (
           <div style={{ ...cardStyle, padding: '1.5rem', backgroundColor: '#0b1329', color: 'white' }}>
             <h3 style={{ color: '#ffcc00', marginBottom: '1rem', fontSize: '1.1rem' }}>🏆 Missions de la semaine</h3>
@@ -403,19 +388,17 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* 3. CHAT */}
         {activeTab === 'chat' && (
           <div style={{ 
             ...cardStyle, 
             padding: 0, 
             overflow: 'hidden', 
-            height: 'auto', // Changez 450px pour auto afin que ça s'adapte
+            height: 'auto', 
             minHeight: '450px',
             display: 'flex', 
-            flexDirection: window.innerWidth < 768 ? 'column' : 'row', // Force la colonne sur mobile
+            flexDirection: 'row',
             position: 'relative' 
           }}>
-            {/* Barre latérale des groupes */}
             <aside style={{ width: '160px', backgroundColor: '#0b1329', borderRight: '1px solid #1e2942', display: 'flex', flexDirection: 'column' }}>
               <div style={{ padding: '0.8rem', borderBottom: '1px solid #1e2942', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'white' }}>GROUPES</span>
@@ -468,7 +451,6 @@ export default function HomePage() {
               </div>
             </aside>
 
-            {/* Zone de conversation */}
             <section style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
               <header style={{ padding: '0.8rem 1rem', borderBottom: '1px solid #1e2942', backgroundColor: '#131c35', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 style={{ margin: 0, color: '#ffcc00', fontSize: '1rem' }}>
@@ -490,7 +472,6 @@ export default function HomePage() {
                     <button onClick={() => setShowGroupMembers(false)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '0.8rem' }}>✕</button>
                   </div>
                   
-                  {/* Conteneur unique pour la liste */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto' }}>
                     {groups.find(g => g.id === activeGroupId)?.members?.map((member) => (
                       <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -499,7 +480,7 @@ export default function HomePage() {
                         </div>
                         <span style={{ color: 'white', fontSize: '0.8rem' }}>{member.name}</span>
                       </div>
-                    ))}
+                    )) || <span style={{ color: '#8b9bb4', fontSize: '0.8rem' }}>Aucun membre listé</span>}
                   </div>
                 </div>
               )}
@@ -548,7 +529,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* 4. PROFIL */}
         {activeTab === 'profile' && (
           <div style={cardStyle}>
             <h2 style={{ color: '#ffcc00', marginTop: 0 }}>Profil & Équipe</h2>
@@ -624,7 +604,6 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* BARRE DE NAVIGATION EN BAS */}
       <nav style={bottomNavStyle}>
         <button onClick={() => setActiveTab('podium')} style={{ ...navBtnStyle, color: activeTab === 'podium' ? '#ffcc00' : '#8b9bb4' }}>
           <span style={{ fontSize: '1.2rem' }}>🏆</span>
@@ -652,7 +631,6 @@ export default function HomePage() {
   )
 }
 
-// Styles
 const containerStyle: React.CSSProperties = { backgroundColor: '#0b1329', color: 'white', minHeight: '100vh', fontFamily: 'sans-serif' }
 const headerStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem', backgroundColor: '#131c35', borderBottom: '1px solid #1e2942' }
 const cardStyle: React.CSSProperties = { backgroundColor: '#131c35', padding: '1.5rem', borderRadius: '12px', border: '1px solid #1e2942' }
@@ -663,9 +641,9 @@ const statTitleStyle: React.CSSProperties = { color: '#8b9bb4', fontSize: '0.7re
 const primaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: '#ffcc00', color: '#0b1329', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
 const secondaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: 'transparent', color: '#ffcc00', border: '1px solid #ffcc00', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
 const linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#ff4d4f', cursor: 'pointer', textDecoration: 'underline', textAlign: 'left', padding: 0, fontSize: '0.85rem' }
-const inputStyle: React.CSSProperties = { padding: '0.8rem', borderRadius: '6px', border: '1px solid #1e2942', backgroundColor: '#0b1329', color: 'white' }
-const bottomNavStyle: React.CSSProperties = { position: 'fixed', bottom: 0, left: 0, right: 0, height: '60px', backgroundColor: '#131c35', borderTop: '1px solid #1e2942', display: 'flex', justifyContent: 'space-around', alignItems: 'center', zIndex: 10 }
-const navBtnStyle: React.CSSProperties = { background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', gap: '2px' }
-const avatarLargeStyle: React.CSSProperties = { width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#0b1329', border: '2px solid #ffcc00', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }
+const inputStyle: React.CSSProperties = { backgroundColor: '#0b1329', border: '1px solid #1e2942', borderRadius: '6px', color: 'white', padding: '0.8rem' }
+const avatarLargeStyle: React.CSSProperties = { width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }
 const avatarImgStyle: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' }
-const uploadBtnStyle: React.CSSProperties = { fontSize: '0.75rem', color: '#ffcc00', cursor: 'pointer', textDecoration: 'underline', marginTop: '0.2rem' }
+const uploadBtnStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#ffcc00', cursor: 'pointer', textDecoration: 'underline' }
+const bottomNavStyle: React.CSSProperties = { position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#131c35', borderTop: '1px solid #1e2942', display: 'flex', justifyContent: 'around', padding: '0.5rem 0', zIndex: 100 }
+const navBtnStyle: React.CSSProperties = { flex: 1, background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', gap: '2px' }
