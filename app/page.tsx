@@ -243,7 +243,7 @@ export default function HomePage() {
     if (!user) return
 
     // Ajouter l'utilisateur dans les membres de l'équipe sur Supabase
-    await supabase.from('squad_members'].upsert([{
+    await supabase.from('squad_members').upsert([{
       squad_code: squadToJoin.code,
       user_id: user.id,
       user_name: displayName,
