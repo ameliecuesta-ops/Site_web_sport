@@ -14,22 +14,17 @@ interface SquadData {
 interface Member {
   id: string
   name: string
-}
-
-interface Group {
-  id: string
-  name: string
-  members?: Member[]
+  avatar?: string | null
 }
 
 interface Message {
   id: string
-  groupId: string
   senderId: string
   senderName: string
   senderAvatar: string | null
   text: string
   createdAt: string
+  reactions?: Record<string, string[]>
 }
 
 export default function HomePage() {
@@ -53,13 +48,13 @@ export default function HomePage() {
 
   const [activeTab, setActiveTab] = useState<'podium' | 'missions' | 'chat' | 'profile'>('podium')
 
-  const [groups, setGroups] = useState<Group[]>([])
-  const [activeGroupId, setActiveGroupId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState('')
-  const [showNewGroupInput, setShowNewGroupInput] = useState(false)
-  const [newGroupName, setNewGroupName] = useState('')
   const [showGroupMembers, setShowGroupMembers] = useState(false)
+  const [squadMembers, setSquadMembers] = useState<Member[]>([])
+  
+  const [activeMessageForEmoji, setActiveMessageForEmoji] = useState<string | null>(null)
+  const [reactionDetailsModal, setReactionDetailsModal] = useState<{ messageId: string; emoji: string } | null>(null)
 
   const [action, setAction] = useState<'choice' | 'create' | 'join'>('choice')
   const [squadNameInput, setSquadNameInput] = useState('')
@@ -78,18 +73,6 @@ export default function HomePage() {
       if (savedSquad) {
         const parsedSquad = JSON.parse(savedSquad)
         setSquad(parsedSquad)
-
-        const savedGroups = localStorage.getItem(`chat_groups_${parsedSquad.code}`)
-        if (savedGroups) {
-          const parsedGroups = JSON.parse(savedGroups)
-          setGroups(parsedGroups)
-          setActiveGroupId(parsedGroups[0]?.id || 'general')
-        } else {
-          const initialGroups: Group[] = [{ id: 'general', name: parsedSquad.name }]
-          setGroups(initialGroups)
-          setActiveGroupId('general')
-          localStorage.setItem(`chat_groups_${parsedSquad.code}`, JSON.stringify(initialGroups))
-        }
       }
 
       const savedName = localStorage.getItem(`displayName_${session.user.id}`)
@@ -106,7 +89,21 @@ export default function HomePage() {
   useEffect(() => {
     if (!squad) return
 
-    const fetchMessages = async () => {
+    const fetchSquadData = async () => {
+      const membersList: Member[] = []
+      Object.keys(localStorage).forEach((key) => {
+        if (key.startsWith('squad_')) {
+          const data = JSON.parse(localStorage.getItem(key) || '{}')
+          if (data.code === squad.code) {
+            const userId = key.replace('squad_', '')
+            const name = localStorage.getItem(`displayName_${userId}`) || 'Membre'
+            const avatar = localStorage.getItem(`avatar_${userId}`) || null
+            membersList.push({ id: userId, name, avatar })
+          }
+        }
+      })
+      setSquadMembers(membersList)
+
       const { data, error } = await supabase
         .from('messages')
         .select('*')
@@ -116,37 +113,45 @@ export default function HomePage() {
       if (!error && data) {
         setMessages(data.map((m: any) => ({
           id: m.id.toString(),
-          groupId: m.group_id,
           senderId: m.sender_id,
           senderName: m.sender_name,
           senderAvatar: m.sender_avatar,
           text: m.text,
-          createdAt: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          createdAt: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          reactions: m.reactions || {}
         })))
       }
     }
 
-    fetchMessages()
+    fetchSquadData()
 
     const channel = supabase
       .channel('public:messages')
       .on('postgres_changes', { 
-        event: 'INSERT', 
+        event: '*', 
         schema: 'public', 
         table: 'messages'
       }, (payload) => {
         const newItem = payload.new as any
-        if (newItem.squad_code === squad.code) {
+        if (newItem && newItem.squad_code === squad.code) {
           const formattedMsg: Message = {
             id: newItem.id.toString(),
-            groupId: newItem.group_id,
             senderId: newItem.sender_id,
             senderName: newItem.sender_name,
             senderAvatar: newItem.sender_avatar,
             text: newItem.text,
-            createdAt: new Date(newItem.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            createdAt: new Date(newItem.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            reactions: newItem.reactions || {}
           }
-          setMessages((prev) => [...prev, formattedMsg])
+          setMessages((prev) => {
+            const index = prev.findIndex(m => m.id === formattedMsg.id)
+            if (index !== -1) {
+              const updated = [...prev]
+              updated[index] = formattedMsg
+              return updated
+            }
+            return [...prev, formattedMsg]
+          })
         }
       })
       .subscribe()
@@ -156,36 +161,49 @@ export default function HomePage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessage.trim() || !user || !squad || !activeGroupId) return
+    if (!newMessage.trim() || !user || !squad) return
 
     const { error } = await supabase.from('messages').insert([
       {
-        group_id: activeGroupId,
         squad_code: squad.code,
         sender_id: user.id,
         sender_name: displayName,
         sender_avatar: avatarUrl,
-        text: newMessage.trim()
+        text: newMessage.trim(),
+        reactions: {}
       }
     ])
 
     if (!error) setNewMessage('')
   }
 
-  const handleCreateGroup = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!newGroupName.trim() || !squad) return
+  const handleAddReaction = async (messageId: string, emoji: string) => {
+    if (!user) return
+    
+    const targetMsg = messages.find(m => m.id === messageId)
+    if (!targetMsg) return
 
-    const newGrp: Group = {
-      id: Date.now().toString(),
-      name: newGroupName.trim(),
+    const updatedReactions: Record<string, string[]> = JSON.parse(JSON.stringify(targetMsg.reactions || {}))
+    
+    const userIds = updatedReactions[emoji] || []
+    if (userIds.includes(user.id)) {
+      updatedReactions[emoji] = userIds.filter((id) => id !== user.id)
+      if (updatedReactions[emoji].length === 0) {
+        delete updatedReactions[emoji]
+      }
+    } else {
+      updatedReactions[emoji] = [...userIds, user.id]
     }
-    const updatedGroups = [...groups, newGrp]
-    setGroups(updatedGroups)
-    setActiveGroupId(newGrp.id)
-    localStorage.setItem(`chat_groups_${squad.code}`, JSON.stringify(updatedGroups))
-    setNewGroupName('')
-    setShowNewGroupInput(false)
+
+    setMessages((prev) =>
+      prev.map((msg) => (msg.id === messageId ? { ...msg, reactions: updatedReactions } : msg))
+    )
+    setActiveMessageForEmoji(null)
+
+    await supabase
+      .from('messages')
+      .update({ reactions: updatedReactions })
+      .eq('id', messageId)
   }
 
   const handleCreateSquad = (e: React.FormEvent) => {
@@ -197,11 +215,6 @@ export default function HomePage() {
 
     localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
     setSquad(squadData)
-
-    const initialGroups: Group[] = [{ id: 'general', name: squadData.name }]
-    setGroups(initialGroups)
-    setActiveGroupId('general')
-    localStorage.setItem(`chat_groups_${squadData.code}`, JSON.stringify(initialGroups))
   }
 
   const handleLogout = async () => {
@@ -229,8 +242,6 @@ export default function HomePage() {
       reader.readAsDataURL(file)
     }
   }
-
-  const currentGroupMessages = messages.filter((m) => m.groupId === activeGroupId)
 
   if (loading) return <div style={containerStyle}><p style={{ color: '#8b9bb4', textAlign: 'center', marginTop: '2rem' }}>Chargement...</p></div>
 
@@ -393,139 +404,248 @@ export default function HomePage() {
             ...cardStyle, 
             padding: 0, 
             overflow: 'hidden', 
-            height: 'auto', 
-            minHeight: '450px',
+            height: '500px',
             display: 'flex', 
-            flexDirection: 'row',
+            flexDirection: 'column',
             position: 'relative' 
           }}>
-            <aside style={{ width: '160px', backgroundColor: '#0b1329', borderRight: '1px solid #1e2942', display: 'flex', flexDirection: 'column' }}>
-              <div style={{ padding: '0.8rem', borderBottom: '1px solid #1e2942', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'white' }}>GROUPES</span>
-                <button
-                  onClick={() => setShowNewGroupInput(!showNewGroupInput)}
-                  style={{ backgroundColor: '#ffcc00', color: '#0b1329', border: 'none', borderRadius: '4px', width: '22px', height: '22px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center' }}
-                >
-                  +
-                </button>
-              </div>
+            <header style={{ padding: '0.8rem 1rem', borderBottom: '1px solid #1e2942', backgroundColor: '#131c35', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, color: '#ffcc00', fontSize: '1rem' }}>
+                💬 Chat de l'équipe : {squad.name}
+              </h3>
+              <button
+                onClick={() => setShowGroupMembers(!showGroupMembers)}
+                style={{ background: 'none', border: 'none', color: '#ffcc00', fontSize: '1.2rem', cursor: 'pointer', padding: '0 4px', letterSpacing: '2px' }}
+                title="Voir les membres de l'équipe"
+              >
+                •••
+              </button>
+            </header>
 
-              {showNewGroupInput && (
-                <form onSubmit={handleCreateGroup} style={{ padding: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.3rem', borderBottom: '1px solid #1e2942' }}>
-                  <input
-                    type="text"
-                    placeholder="Nom groupe"
-                    value={newGroupName}
-                    onChange={(e) => setNewGroupName(e.target.value)}
-                    required
-                    style={{ ...inputStyle, padding: '0.4rem', fontSize: '0.75rem' }}
-                  />
-                  <button type="submit" style={{ ...primaryBtnStyle, padding: '0.3rem', fontSize: '0.75rem' }}>Créer</button>
-                </form>
-              )}
-
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                {groups.map((grp) => (
-                  <button
-                    key={grp.id}
-                    onClick={() => {
-                      setActiveGroupId(grp.id)
-                      setShowGroupMembers(false)
-                    }}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '0.7rem 0.8rem',
-                      background: activeGroupId === grp.id ? '#1e2942' : 'transparent',
-                      color: activeGroupId === grp.id ? '#ffcc00' : '#8b9bb4',
-                      border: 'none',
-                      borderBottom: '1px solid #131c35',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      fontWeight: activeGroupId === grp.id ? 'bold' : 'normal',
-                    }}
-                  >
-                    # {grp.name}
-                  </button>
-                ))}
-              </div>
-            </aside>
-
-            <section style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-              <header style={{ padding: '0.8rem 1rem', borderBottom: '1px solid #1e2942', backgroundColor: '#131c35', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, color: '#ffcc00', fontSize: '1rem' }}>
-                  # {groups.find((g) => g.id === activeGroupId)?.name || squad.name}
-                </h3>
-                <button
-                  onClick={() => setShowGroupMembers(!showGroupMembers)}
-                  style={{ background: 'none', border: 'none', color: '#ffcc00', fontSize: '1.2rem', cursor: 'pointer', padding: '0 4px', letterSpacing: '2px' }}
-                  title="Voir les membres du groupe"
-                >
-                  •••
-                </button>
-              </header>
-
-              {showGroupMembers && (
-                <div style={{ position: 'absolute', top: '45px', right: '10px', width: '200px', backgroundColor: '#0b1329', border: '1px solid #ffcc00', borderRadius: '8px', padding: '0.8rem', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem', borderBottom: '1px solid #1e2942', paddingBottom: '0.4rem' }}>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'white' }}>MEMBRES DU GROUPE</span>
-                    <button onClick={() => setShowGroupMembers(false)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '0.8rem' }}>✕</button>
-                  </div>
-                  
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto' }}>
-                    {groups.find(g => g.id === activeGroupId)?.members?.map((member) => (
-                      <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                          👤
-                        </div>
-                        <span style={{ color: 'white', fontSize: '0.8rem' }}>{member.name}</span>
+            {showGroupMembers && (
+              <div style={{ position: 'absolute', top: '45px', right: '10px', width: '220px', backgroundColor: '#0b1329', border: '1px solid #ffcc00', borderRadius: '8px', padding: '0.8rem', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem', borderBottom: '1px solid #1e2942', paddingBottom: '0.4rem' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'white' }}>MEMBRES DE L'ÉQUIPE</span>
+                  <button onClick={() => setShowGroupMembers(false)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '0.8rem' }}>✕</button>
+                </div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto' }}>
+                  {squadMembers.map((member) => (
+                    <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
+                        {member.avatar ? (
+                          <img src={member.avatar} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        ) : (
+                          <span style={{ fontSize: '0.8rem' }}>👤</span>
+                        )}
                       </div>
-                    )) || <span style={{ color: '#8b9bb4', fontSize: '0.8rem' }}>Aucun membre listé</span>}
+                      <span style={{ color: 'white', fontSize: '0.8rem' }}>{member.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.2rem', backgroundColor: '#ffffff' }}>
+              {messages.length === 0 ? (
+                <p style={{ color: '#8b9bb4', fontSize: '0.85rem', textAlign: 'center', margin: 'auto' }}>Aucun message pour l'instant. Écris le premier !</p>
+              ) : (
+                messages.map((msg) => {
+                  const isMe = msg.senderId === user?.id
+                  const isEmojiPickerOpen = activeMessageForEmoji === msg.id
+
+                  return (
+                    <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
+                      
+                      {/* Bulle cliquable */}
+                      <div
+                        onClick={() => setActiveMessageForEmoji(isEmojiPickerOpen ? null : msg.id)}
+                        style={{
+                          maxWidth: '80%',
+                          backgroundColor: isMe ? '#ffcc00' : '#1e2942',
+                          color: isMe ? '#0b1329' : 'white',
+                          padding: '0.6rem 0.8rem',
+                          borderRadius: '10px',
+                          wordBreak: 'break-word',
+                          fontSize: '0.9rem',
+                          cursor: 'pointer',
+                          userSelect: 'none'
+                        }}
+                        title="Clique pour réagir"
+                      >
+                        {msg.text}
+                      </div>
+
+                      {/* Les 4 smileys s'affichent directement SOUS la bulle */}
+                      {isEmojiPickerOpen && (
+                        <div style={{
+                          display: 'flex',
+                          gap: '6px',
+                          backgroundColor: '#0b1329',
+                          border: '1px solid #ffcc00',
+                          padding: '6px 10px',
+                          borderRadius: '20px',
+                          marginTop: '4px',
+                          boxShadow: '0 4px 10px rgba(0,0,0,0.3)',
+                          zIndex: 30
+                        }}>
+                          {['👍', '❤️', '🔥', '😂'].map((emoji) => (
+                            <button
+                              key={emoji}
+                              onClick={() => handleAddReaction(msg.id, emoji)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                fontSize: '1.2rem',
+                                cursor: 'pointer',
+                                padding: '2px'
+                              }}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Réactions déjà postées sous le message */}
+                      {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                        <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                          {Object.entries(msg.reactions).map(([emoji, userIds]) => {
+                            const hasReacted = user && userIds.includes(user.id)
+                            return (
+                              <button
+                                key={emoji}
+                                onClick={() => setReactionDetailsModal({ messageId: msg.id, emoji })}
+                                style={{
+                                  fontSize: '0.7rem',
+                                  backgroundColor: hasReacted ? '#1e2942' : '#0b1329',
+                                  border: hasReacted ? '1px solid #ffcc00' : '1px solid #2a3b5c',
+                                  padding: '2px 6px',
+                                  borderRadius: '10px',
+                                  color: 'white',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '3px'
+                                }}
+                              >
+                                <span>{emoji}</span>
+                                <span>{userIds.length}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      <span style={{ fontSize: '0.7rem', color: '#8b9bb4', marginTop: '3px', padding: '0 2px' }}>
+                        {msg.senderName} • {msg.createdAt}
+                      </span>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            {/* Modal style WhatsApp pour voir qui a réagi */}
+            {reactionDetailsModal && (() => {
+              const currentMsg = messages.find(m => m.id === reactionDetailsModal.messageId)
+              const userIds = currentMsg?.reactions?.[reactionDetailsModal.emoji] || []
+              
+              return (
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  backgroundColor: 'rgba(0,0,0,0.6)',
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  zIndex: 50,
+                  padding: '1rem'
+                }}>
+                  <div style={{
+                    backgroundColor: '#131c35',
+                    border: '1px solid #1e2942',
+                    borderRadius: '12px',
+                    width: '100%',
+                    maxWidth: '320px',
+                    overflow: 'hidden',
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+                  }}>
+                    <div style={{
+                      padding: '0.8rem 1rem',
+                      borderBottom: '1px solid #1e2942',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      backgroundColor: '#0b1329'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '1.2rem' }}>{reactionDetailsModal.emoji}</span>
+                        <span style={{ color: 'white', fontWeight: 'bold', fontSize: '0.9rem' }}>{userIds.length}</span>
+                      </div>
+                      <button
+                        onClick={() => setReactionDetailsModal(null)}
+                        style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '1rem' }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <div style={{ padding: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '200px', overflowY: 'auto' }}>
+                      {userIds.map((uid) => {
+                        const member = squadMembers.find(m => m.id === uid)
+                        const name = uid === user?.id ? displayName : (member?.name || 'Membre')
+                        const avatar = uid === user?.id ? avatarUrl : (member?.avatar || null)
+                        const isMe = uid === user?.id
+
+                        return (
+                          <div key={uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#0b1329', padding: '0.5rem 0.8rem', borderRadius: '8px', border: '1px solid #1e2942' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                              <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
+                                {avatar ? (
+                                  <img src={avatar} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                ) : (
+                                  <span style={{ fontSize: '0.8rem' }}>👤</span>
+                                )}
+                              </div>
+                              <span style={{ color: 'white', fontSize: '0.85rem' }}>{name} {isMe ? '(moi)' : ''}</span>
+                            </div>
+
+                            {/* Si c'est l'utilisateur connecté, clic sur l'emoji pour l'enlever directement */}
+                            {isMe && (
+                              <button
+                                onClick={() => {
+                                  handleAddReaction(reactionDetailsModal.messageId, reactionDetailsModal.emoji)
+                                  setReactionDetailsModal(null)
+                                }}
+                                style={{ background: 'none', border: 'none', fontSize: '1.1rem', cursor: 'pointer', padding: '2px' }}
+                                title="Retirer ma réaction"
+                              >
+                                {reactionDetailsModal.emoji}
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
-              )}
+              )
+            })()}
 
-              <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', backgroundColor: '#ffffff' }}>
-                {currentGroupMessages.length === 0 ? (
-                  <p style={{ color: '#8b9bb4', fontSize: '0.85rem', textAlign: 'center', margin: 'auto' }}>Aucun message dans ce groupe. Écris le premier !</p>
-                ) : (
-                  currentGroupMessages.map((msg) => {
-                    const isMe = msg.senderId === user?.id
-                    return (
-                      <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
-                        <div
-                          style={{
-                            maxWidth: '80%',
-                            backgroundColor: isMe ? '#ffcc00' : '#1e2942',
-                            color: isMe ? '#0b1329' : 'white',
-                            padding: '0.6rem 0.8rem',
-                            borderRadius: '10px',
-                            wordBreak: 'break-word',
-                            fontSize: '0.9rem',
-                          }}
-                        >
-                          {msg.text}
-                        </div>
-                        <span style={{ fontSize: '0.7rem', color: '#8b9bb4', marginTop: '3px', padding: '0 2px' }}>
-                          {msg.senderName} • {msg.createdAt}
-                        </span>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-
-              <form onSubmit={handleSendMessage} style={{ padding: '0.8rem', borderTop: '1px solid #1e2942', display: 'flex', gap: '0.5rem', backgroundColor: '#131c35' }}>
-                <input
-                  type="text"
-                  placeholder="Écris ton message..."
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  style={{ ...inputStyle, flex: 1, padding: '0.6rem 0.8rem' }}
-                />
-                <button type="submit" style={{ ...primaryBtnStyle, padding: '0.6rem 1rem' }}>Envoyer</button>
-              </form>
-            </section>
+            <form onSubmit={handleSendMessage} style={{ padding: '0.8rem', borderTop: '1px solid #1e2942', display: 'flex', gap: '0.5rem', backgroundColor: '#131c35' }}>
+              <input
+                type="text"
+                placeholder="Écris ton message à l'équipe..."
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                style={{ ...inputStyle, flex: 1, padding: '0.6rem 0.8rem' }}
+              />
+              <button type="submit" style={{ ...primaryBtnStyle, padding: '0.6rem 1rem' }}>Envoyer</button>
+            </form>
           </div>
         )}
 
@@ -583,9 +703,27 @@ export default function HomePage() {
                 <div style={{ color: '#ffcc00', fontWeight: 'bold', fontSize: '1.2rem' }}>{squad.name}</div>
               </div>
 
+              <div>
+                <span style={statTitleStyle}>MEMBRES DE L'ÉQUIPE</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.4rem' }}>
+                  {squadMembers.map((member) => (
+                    <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', color: 'white', fontSize: '0.9rem', backgroundColor: '#0b1329', padding: '0.5rem 0.8rem', borderRadius: '6px', border: '1px solid #1e2942' }}>
+                      <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
+                        {member.avatar ? (
+                          <img src={member.avatar} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        ) : (
+                          <span style={{ fontSize: '0.9rem' }}>👤</span>
+                        )}
+                      </div>
+                      <span>{member.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               {squad.isAdmin ? (
                 <div style={{ backgroundColor: '#0b1329', padding: '1rem', borderRadius: '8px', border: '1px solid #4caf50' }}>
-                  <span style={{ color: '#4caf50', fontSize: '0.75rem', fontWeight: 'bold' }}>RÔLE : ADMIN DU GROUPE</span>
+                  <span style={{ color: '#4caf50', fontSize: '0.75rem', fontWeight: 'bold' }}>RÔLE : ADMIN DE L'ÉQUIPE</span>
                   <div style={{ color: 'white', fontSize: '0.9rem', marginTop: '0.4rem' }}>
                     Code d'accès équipe : <strong style={{ color: '#ffcc00', fontSize: '1.1rem' }}>{squad.code}</strong>
                   </div>
@@ -639,11 +777,10 @@ const podiumContainerStyle: React.CSSProperties = { display: 'flex', justifyCont
 const podiumStepStyle: React.CSSProperties = { width: '80px', borderRadius: '8px 8px 0 0', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }
 const statTitleStyle: React.CSSProperties = { color: '#8b9bb4', fontSize: '0.7rem', letterSpacing: '1px' }
 const primaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: '#ffcc00', color: '#0b1329', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
-const secondaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: 'transparent', color: '#ffcc00', border: '1px solid #ffcc00', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
-const linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#ff4d4f', cursor: 'pointer', textDecoration: 'underline', textAlign: 'left', padding: 0, fontSize: '0.85rem' }
+const secondaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: 'transparent', color: '#ffcc00', border: '1px solid #ffcc00', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }, linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#ff4d4f', cursor: 'pointer', textDecoration: 'underline', textAlign: 'left', padding: 0, fontSize: '0.85rem' }
 const inputStyle: React.CSSProperties = { backgroundColor: '#0b1329', border: '1px solid #1e2942', borderRadius: '6px', color: 'white', padding: '0.8rem' }
 const avatarLargeStyle: React.CSSProperties = { width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }
 const avatarImgStyle: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' }
 const uploadBtnStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#ffcc00', cursor: 'pointer', textDecoration: 'underline' }
-const bottomNavStyle: React.CSSProperties = { position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#131c35', borderTop: '1px solid #1e2942', display: 'flex', justifyContent: 'around', padding: '0.5rem 0', zIndex: 100 }
+const bottomNavStyle: React.CSSProperties = { position: 'fixed', bottom: 0, left: 0, right: 0, backgroundColor: '#131c35', borderTop: '1px solid #1e2942', display: 'flex', justifyContent: 'space-around', padding: '0.5rem 0', zIndex: 100 }
 const navBtnStyle: React.CSSProperties = { flex: 1, background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', gap: '2px' }
