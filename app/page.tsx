@@ -86,11 +86,23 @@ export default function HomePage() {
         setSquad(parsedSquad)
       }
 
-      const savedName = localStorage.getItem(`displayName_${session.user.id}`)
-      setDisplayName(savedName || session.user.email?.split('@')[0] || 'Joueur')
-      
-      const savedAvatar = localStorage.getItem(`avatar_${session.user.id}`)
-      if (savedAvatar) setAvatarUrl(savedAvatar)
+      // Charger le profil depuis Supabase (table profiles)
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('display_name, avatar_url')
+        .eq('user_id', session.user.id)
+        .single()
+
+      if (profileData) {
+        setDisplayName(profileData.display_name || session.user.email?.split('@')[0] || 'Joueur')
+        setAvatarUrl(profileData.avatar_url || null)
+      } else {
+        const defaultName = session.user.email?.split('@')[0] || 'Joueur'
+        setDisplayName(defaultName)
+        await supabase.from('profiles').upsert([
+          { user_id: session.user.id, display_name: defaultName, avatar_url: null }
+        ], { onConflict: 'user_id' })
+      }
       
       setLoading(false)
     }
@@ -260,11 +272,27 @@ export default function HomePage() {
     router.push('/login')
   }
 
-  const handleSaveName = (e: React.FormEvent) => {
+  const handleSaveName = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!tempName.trim() || !user) return
-    localStorage.setItem(`displayName_${user.id}`, tempName.trim())
-    setDisplayName(tempName.trim())
+    
+    const newName = tempName.trim()
+    
+    // Mettre à jour la table profiles
+    await supabase
+      .from('profiles')
+      .upsert([{ user_id: user.id, display_name: newName, avatar_url: avatarUrl }], { onConflict: 'user_id' })
+
+    // Mettre à jour aussi le nom dans les membres de l'équipe active si existante
+    if (squad) {
+      await supabase
+        .from('squad_members')
+        .update({ user_name: newName })
+        .eq('user_id', user.id)
+        .eq('squad_code', squad.code)
+    }
+
+    setDisplayName(newName)
     setIsEditingName(false)
   }
 
@@ -272,10 +300,23 @@ export default function HomePage() {
     const file = e.target.files?.[0]
     if (file && user) {
       const reader = new FileReader()
-      reader.onloadend = () => {
+      reader.onloadend = async () => {
         const base64Image = reader.result as string
         setAvatarUrl(base64Image)
-        localStorage.setItem(`avatar_${user.id}`, base64Image)
+
+        // Mettre à jour la table profiles
+        await supabase
+          .from('profiles')
+          .upsert([{ user_id: user.id, display_name: displayName, avatar_url: base64Image }], { onConflict: 'user_id' })
+
+        // Mettre à jour l'avatar dans les membres de l'équipe active si existante
+        if (squad) {
+          await supabase
+            .from('squad_members')
+            .update({ avatar_url: base64Image })
+            .eq('user_id', user.id)
+            .eq('squad_code', squad.code)
+        }
       }
       reader.readAsDataURL(file)
     }
@@ -291,9 +332,9 @@ export default function HomePage() {
           <button onClick={handleLogout} style={logoutButtonStyle}>Déconnexion</button>
         </header>
 
-        <main style={{ maxWidth: '850px', margin: '3rem auto', padding: '0 1rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-            <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+        <main style={{ maxWidth: '450px', margin: '2rem auto', padding: '0 1rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', alignItems: 'center' }}>
+            <div style={{ ...cardStyle, width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
               <h2 style={{ color: '#ffcc00', marginTop: 0 }}>Créer une équipe</h2>
               <form onSubmit={handleCreateSquad} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem', width: '100%' }}>
                 <input 
@@ -308,7 +349,7 @@ export default function HomePage() {
               </form>
             </div>
 
-            <div style={cardStyle}>
+            <div style={{ ...cardStyle, width: '100%' }}>
               <h2 style={{ color: '#ffcc00', marginTop: 0, textAlign: 'center' }}>Rejoindre une équipe</h2>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
                 <span style={{ fontSize: '0.8rem', color: '#8b9bb4' }}>Équipes existantes :</span>
