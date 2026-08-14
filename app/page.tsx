@@ -59,6 +59,17 @@ export default function HomePage() {
   const [action, setAction] = useState<'choice' | 'create' | 'join'>('choice')
   const [squadNameInput, setSquadNameInput] = useState('')
 
+  // Charger les équipes depuis Supabase pour que ce soit synchro partout
+  const [availableSquads, setAvailableSquads] = useState<{ name: string; code: string }[]>([])
+
+  useEffect(() => {
+    const fetchSquads = async () => {
+      const { data } = await supabase.from('squads').select('*')
+      if (data) setAvailableSquads(data)
+    }
+    fetchSquads()
+  }, [])
+
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -90,19 +101,19 @@ export default function HomePage() {
     if (!squad) return
 
     const fetchSquadData = async () => {
-      const membersList: Member[] = []
-      Object.keys(localStorage).forEach((key) => {
-        if (key.startsWith('squad_')) {
-          const data = JSON.parse(localStorage.getItem(key) || '{}')
-          if (data.code === squad.code) {
-            const userId = key.replace('squad_', '')
-            const name = localStorage.getItem(`displayName_${userId}`) || 'Membre'
-            const avatar = localStorage.getItem(`avatar_${userId}`) || null
-            membersList.push({ id: userId, name, avatar })
-          }
-        }
-      })
-      setSquadMembers(membersList)
+      // Récupérer les membres depuis Supabase
+      const { data: membersData } = await supabase
+        .from('squad_members')
+        .select('*')
+        .eq('squad_code', squad.code)
+
+      if (membersData) {
+        setSquadMembers(membersData.map((m: any) => ({
+          id: m.user_id,
+          name: m.user_name,
+          avatar: m.avatar_url
+        })))
+      }
 
       const { data, error } = await supabase
         .from('messages')
@@ -206,13 +217,40 @@ export default function HomePage() {
       .eq('id', messageId)
   }
 
-  const handleCreateSquad = (e: React.FormEvent) => {
+  const handleCreateSquad = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!squadNameInput.trim() || !user) return
 
     const generatedCode = ('SQ-' + Math.random().toString(36).substring(2, 6)).toUpperCase()
-    const squadData: SquadData = { name: squadNameInput.trim(), code: generatedCode, isAdmin: true }
+    
+    // 1. Créer l'équipe dans Supabase
+    await supabase.from('squads').insert([{ name: squadNameInput.trim(), code: generatedCode }])
 
+    // 2. Ajouter l'utilisateur comme membre
+    await supabase.from('squad_members').insert([{
+      squad_code: generatedCode,
+      user_id: user.id,
+      user_name: displayName,
+      avatar_url: avatarUrl
+    }])
+
+    const squadData: SquadData = { name: squadNameInput.trim(), code: generatedCode, isAdmin: true }
+    localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
+    setSquad(squadData)
+  }
+
+  const handleJoinSquad = async (squadToJoin: { name: string; code: string }) => {
+    if (!user) return
+
+    // Ajouter l'utilisateur dans les membres de l'équipe sur Supabase
+    await supabase.from('squad_members'].upsert([{
+      squad_code: squadToJoin.code,
+      user_id: user.id,
+      user_name: displayName,
+      avatar_url: avatarUrl
+    }], { onConflict: 'squad_code,user_id' })
+
+    const squadData: SquadData = { name: squadToJoin.name, code: squadToJoin.code, isAdmin: false }
     localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
     setSquad(squadData)
   }
@@ -275,53 +313,48 @@ export default function HomePage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
                 <span style={{ fontSize: '0.8rem', color: '#8b9bb4' }}>Équipes existantes :</span>
                 <div style={{ maxHeight: '250px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-                  {Object.keys(localStorage)
-                    .filter((key) => key.startsWith('squad_'))
-                    .map((key) => {
-                      const data = JSON.parse(localStorage.getItem(key) || '{}')
-                      const isSelected = selectedCode === key
+                  {availableSquads.map((s) => {
+                    const isSelected = selectedCode === s.code
 
-                      return (
-                        <div key={key} style={{ backgroundColor: '#0b1329', padding: '0.8rem', borderRadius: '6px', border: '1px solid #1e2942', marginBottom: '0.5rem' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: 'white', fontWeight: 'bold' }}>{data.name}</span>
-                            <button 
-                              type="button"
-                              onClick={() => {
-                                setSelectedCode(isSelected ? null : key)
-                                setJoinPassword('')
-                              }} 
-                              style={{ ...secondaryBtnStyle, padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
-                            >
-                              {isSelected ? 'Annuler' : 'Rejoindre'}
-                            </button>
-                          </div>
-
-                          {isSelected && (
-                            <form onSubmit={(e) => {
-                              e.preventDefault()
-                              if (joinPassword.trim().toUpperCase() === data.code.toUpperCase()) {
-                                const squadData = { ...data, isAdmin: false }
-                                localStorage.setItem(`squad_${user?.id}`, JSON.stringify(squadData))
-                                setSquad(squadData)
-                              } else {
-                                alert("Code incorrect !")
-                              }
-                            }} style={{ marginTop: '0.8rem', display: 'flex', gap: '0.5rem' }}>
-                              <input 
-                                type="text"
-                                inputMode="text"
-                                placeholder="Code secret" 
-                                value={joinPassword}
-                                onChange={(e) => setJoinPassword(e.target.value)}
-                                style={{ ...inputStyle, padding: '0.4rem', flex: 1 }}
-                              />
-                              <button type="submit" style={primaryBtnStyle}>OK</button>
-                            </form>
-                          )}
+                    return (
+                      <div key={s.code} style={{ backgroundColor: '#0b1329', padding: '0.8rem', borderRadius: '6px', border: '1px solid #1e2942', marginBottom: '0.5rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ color: 'white', fontWeight: 'bold' }}>{s.name}</span>
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setSelectedCode(isSelected ? null : s.code)
+                              setJoinPassword('')
+                            }} 
+                            style={{ ...secondaryBtnStyle, padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                          >
+                            {isSelected ? 'Annuler' : 'Rejoindre'}
+                          </button>
                         </div>
-                      )
-                    })}
+
+                        {isSelected && (
+                          <form onSubmit={(e) => {
+                            e.preventDefault()
+                            if (joinPassword.trim().toUpperCase() === s.code.toUpperCase()) {
+                              handleJoinSquad(s)
+                            } else {
+                              alert("Code incorrect !")
+                            }
+                          }} style={{ marginTop: '0.8rem', display: 'flex', gap: '0.5rem' }}>
+                            <input 
+                              type="text"
+                              inputMode="text"
+                              placeholder="Code secret" 
+                              value={joinPassword}
+                              onChange={(e) => setJoinPassword(e.target.value)}
+                              style={{ ...inputStyle, padding: '0.4rem', flex: 1 }}
+                            />
+                            <button type="submit" style={primaryBtnStyle}>OK</button>
+                          </form>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             </div>
@@ -457,7 +490,6 @@ export default function HomePage() {
                   return (
                     <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
                       
-                      {/* Bulle cliquable */}
                       <div
                         onClick={() => setActiveMessageForEmoji(isEmojiPickerOpen ? null : msg.id)}
                         style={{
@@ -476,7 +508,6 @@ export default function HomePage() {
                         {msg.text}
                       </div>
 
-                      {/* Les 4 smileys s'affichent directement SOUS la bulle */}
                       {isEmojiPickerOpen && (
                         <div style={{
                           display: 'flex',
@@ -507,7 +538,6 @@ export default function HomePage() {
                         </div>
                       )}
 
-                      {/* Réactions déjà postées sous le message */}
                       {msg.reactions && Object.keys(msg.reactions).length > 0 && (
                         <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
                           {Object.entries(msg.reactions).map(([emoji, userIds]) => {
@@ -546,7 +576,6 @@ export default function HomePage() {
               )}
             </div>
 
-            {/* Modal style WhatsApp pour voir qui a réagi */}
             {reactionDetailsModal && (() => {
               const currentMsg = messages.find(m => m.id === reactionDetailsModal.messageId)
               const userIds = currentMsg?.reactions?.[reactionDetailsModal.emoji] || []
@@ -614,7 +643,6 @@ export default function HomePage() {
                               <span style={{ color: 'white', fontSize: '0.85rem' }}>{name} {isMe ? '(moi)' : ''}</span>
                             </div>
 
-                            {/* Si c'est l'utilisateur connecté, clic sur l'emoji pour l'enlever directement */}
                             {isMe && (
                               <button
                                 onClick={() => {
@@ -777,7 +805,8 @@ const podiumContainerStyle: React.CSSProperties = { display: 'flex', justifyCont
 const podiumStepStyle: React.CSSProperties = { width: '80px', borderRadius: '8px 8px 0 0', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }
 const statTitleStyle: React.CSSProperties = { color: '#8b9bb4', fontSize: '0.7rem', letterSpacing: '1px' }
 const primaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: '#ffcc00', color: '#0b1329', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
-const secondaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: 'transparent', color: '#ffcc00', border: '1px solid #ffcc00', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }, linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#ff4d4f', cursor: 'pointer', textDecoration: 'underline', textAlign: 'left', padding: 0, fontSize: '0.85rem' }
+const secondaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: 'transparent', color: '#ffcc00', border: '1px solid #ffcc00', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
+const linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#ff4d4f', cursor: 'pointer', textDecoration: 'underline', textAlign: 'left', padding: 0, fontSize: '0.85rem' }
 const inputStyle: React.CSSProperties = { backgroundColor: '#0b1329', border: '1px solid #1e2942', borderRadius: '6px', color: 'white', padding: '0.8rem' }
 const avatarLargeStyle: React.CSSProperties = { width: '80px', height: '80px', borderRadius: '50%', backgroundColor: '#1e2942', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }
 const avatarImgStyle: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' }
