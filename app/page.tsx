@@ -56,10 +56,8 @@ export default function HomePage() {
   const [activeMessageForEmoji, setActiveMessageForEmoji] = useState<string | null>(null)
   const [reactionDetailsModal, setReactionDetailsModal] = useState<{ messageId: string; emoji: string } | null>(null)
 
-  const [action, setAction] = useState<'choice' | 'create' | 'join'>('choice')
   const [squadNameInput, setSquadNameInput] = useState('')
 
-  // Charger les équipes depuis Supabase pour que ce soit synchro partout
   const [availableSquads, setAvailableSquads] = useState<{ name: string; code: string }[]>([])
 
   useEffect(() => {
@@ -80,28 +78,39 @@ export default function HomePage() {
       
       setUser(session.user)
       
-      const savedSquad = localStorage.getItem(`squad_${session.user.id}`)
-      if (savedSquad) {
-        const parsedSquad = JSON.parse(savedSquad)
-        setSquad(parsedSquad)
-      }
+      let currentUserName = session.user.email?.split('@')[0] || 'Joueur'
+      let currentAvatar: string | null = null
 
-      // Charger le profil depuis Supabase (table profiles)
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('display_name, avatar_url')
+        .select('user_name, avatar_url')
         .eq('user_id', session.user.id)
-        .single()
+        .maybeSingle()
 
       if (profileData) {
-        setDisplayName(profileData.display_name || session.user.email?.split('@')[0] || 'Joueur')
-        setAvatarUrl(profileData.avatar_url || null)
+        currentUserName = profileData.user_name || currentUserName
+        currentAvatar = profileData.avatar_url || null
+        setDisplayName(currentUserName)
+        setAvatarUrl(currentAvatar)
       } else {
-        const defaultName = session.user.email?.split('@')[0] || 'Joueur'
-        setDisplayName(defaultName)
         await supabase.from('profiles').upsert([
-          { user_id: session.user.id, display_name: defaultName, avatar_url: null }
+          { user_id: session.user.id, user_name: currentUserName, avatar_url: null, user_email: session.user.email }
         ], { onConflict: 'user_id' })
+        setDisplayName(currentUserName)
+      }
+      
+      const { data: memberData } = await supabase
+        .from('squad_members')
+        .select('squad_code, squad_name, role')
+        .eq('user_id', session.user.id)
+        .maybeSingle()
+
+      if (memberData && memberData.squad_code) {
+        setSquad({ 
+          name: memberData.squad_name || 'Mon équipe', 
+          code: memberData.squad_code, 
+          isAdmin: memberData.role === 'admin' 
+        })
       }
       
       setLoading(false)
@@ -113,18 +122,27 @@ export default function HomePage() {
     if (!squad) return
 
     const fetchSquadData = async () => {
-      // Récupérer les membres depuis Supabase
       const { data: membersData } = await supabase
         .from('squad_members')
         .select('*')
         .eq('squad_code', squad.code)
 
-      if (membersData) {
-        setSquadMembers(membersData.map((m: any) => ({
-          id: m.user_id,
-          name: m.user_name,
-          avatar: m.avatar_url
-        })))
+      if (membersData && membersData.length > 0) {
+        const userIds = membersData.map((m: any) => m.user_id)
+        
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('user_id, user_name, avatar_url')
+          .in('user_id', userIds)
+
+        setSquadMembers(membersData.map((m: any) => {
+          const profile = profilesData?.find((p: any) => p.user_id === m.user_id)
+          return {
+            id: m.user_id,
+            name: profile?.user_name || m.user_email?.split('@')[0] || 'Membre',
+            avatar: profile?.avatar_url || null
+          }
+        }))
       }
 
       const { data, error } = await supabase
@@ -235,36 +253,50 @@ export default function HomePage() {
 
     const generatedCode = ('SQ-' + Math.random().toString(36).substring(2, 6)).toUpperCase()
     
-    // 1. Créer l'équipe dans Supabase
     await supabase.from('squads').insert([{ name: squadNameInput.trim(), code: generatedCode }])
 
-    // 2. Ajouter l'utilisateur comme membre
-    await supabase.from('squad_members').insert([{
+    // On nettoie l'ancienne entrée puis on insère la nouvelle
+    await supabase.from('squad_members').delete().eq('user_id', user.id)
+
+    const {error} = await supabase.from('squad_members').insert([{
       squad_code: generatedCode,
       user_id: user.id,
-      user_name: displayName,
-      avatar_url: avatarUrl
+      user_email: user.email,
+      role: 'admin',
+      squad_name: squadNameInput.trim()
     }])
 
-    const squadData: SquadData = { name: squadNameInput.trim(), code: generatedCode, isAdmin: true }
-    localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
-    setSquad(squadData)
+    if(error){
+      console.error("Erreur insertion squad_members :", error)
+      alert("Erreur lors de la création : " + error.message)
+      return
+    }
+
+    setSquad({ name: squadNameInput.trim(), code: generatedCode, isAdmin: true })
   }
 
   const handleJoinSquad = async (squadToJoin: { name: string; code: string }) => {
     if (!user) return
 
-    // Ajouter l'utilisateur dans les membres de l'équipe sur Supabase
-    await supabase.from('squad_members').upsert([{
+    // On nettoie l'ancienne entrée puis on insère la nouvelle
+    await supabase.from('squad_members').delete().eq('user_id', user.id)
+
+    const {error}= await supabase.from('squad_members').insert([{
       squad_code: squadToJoin.code,
       user_id: user.id,
-      user_name: displayName,
-      avatar_url: avatarUrl
-    }], { onConflict: 'squad_code,user_id' })
+      user_email: user.email,
+      role: 'membre',
+      squad_name: squadToJoin.name
+    }])
 
-    const squadData: SquadData = { name: squadToJoin.name, code: squadToJoin.code, isAdmin: false }
-    localStorage.setItem(`squad_${user.id}`, JSON.stringify(squadData))
-    setSquad(squadData)
+    if (error) {
+      console.error("Erreur insertion squad_members :", error)
+      alert("Erreur lors de la jonction : " + error.message)
+      return
+
+    }
+
+    setSquad({ name: squadToJoin.name, code: squadToJoin.code, isAdmin: false })
   }
 
   const handleLogout = async () => {
@@ -278,12 +310,10 @@ export default function HomePage() {
     
     const newName = tempName.trim()
     
-    // Mettre à jour la table profiles
     await supabase
       .from('profiles')
-      .upsert([{ user_id: user.id, display_name: newName, avatar_url: avatarUrl }], { onConflict: 'user_id' })
+      .upsert([{ user_id: user.id, user_name: newName, avatar_url: avatarUrl, user_email: user.email }], { onConflict: 'user_id' })
 
-    // Mettre à jour aussi le nom dans les membres de l'équipe active si existante
     if (squad) {
       await supabase
         .from('squad_members')
@@ -304,12 +334,10 @@ export default function HomePage() {
         const base64Image = reader.result as string
         setAvatarUrl(base64Image)
 
-        // Mettre à jour la table profiles
         await supabase
           .from('profiles')
-          .upsert([{ user_id: user.id, display_name: displayName, avatar_url: base64Image }], { onConflict: 'user_id' })
+          .upsert([{ user_id: user.id, user_name: displayName, avatar_url: base64Image, user_email: user.email }], { onConflict: 'user_id' })
 
-        // Mettre à jour l'avatar dans les membres de l'équipe active si existante
         if (squad) {
           await supabase
             .from('squad_members')
@@ -320,6 +348,17 @@ export default function HomePage() {
       }
       reader.readAsDataURL(file)
     }
+  }
+
+  const handleLeaveSquad = async () => {
+    if (!user || !squad) return
+    await supabase
+      .from('squad_members')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('squad_code', squad.code)
+
+    setSquad(null)
   }
 
   if (loading) return <div style={containerStyle}><p style={{ color: '#8b9bb4', textAlign: 'center', marginTop: '2rem' }}>Chargement...</p></div>
@@ -798,13 +837,13 @@ export default function HomePage() {
                   </div>
                 </div>
               ) : (
-                <div style={{ backgroundColor: '#0b1329', padding: '1rem', borderRadius: '8px', border: '1px solid #1e2942' }}>
-                  <span style={{ color: '#8b9bb4', fontSize: '0.75rem', fontWeight: 'bold' }}>RÔLE : MEMBRE</span>
+                <div style={{ backgroundColor: '#0b1329', padding: '1rem', borderRadius: '8px', border: '1px solid #ffcc00' }}>
+                  <span style={{ color: '#ffcc00', fontSize: '0.75rem', fontWeight: 'bold' }}>RÔLE : MEMBRE</span>
                 </div>
               )}
 
               <hr style={{ borderColor: '#1e2942', margin: '0.2rem 0' }} />
-              <button onClick={() => { localStorage.removeItem(`squad_${user?.id}`); setSquad(null); setAction('choice'); }} style={linkBtnStyle}>Quitter l'équipe</button>
+              <button onClick={handleLeaveSquad} style={linkBtnStyle}>Quitter l'équipe</button>
               <button onClick={handleLogout} style={logoutButtonStyle}>Se déconnecter</button>
             </div>
           </div>
