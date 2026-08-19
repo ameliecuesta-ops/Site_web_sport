@@ -34,6 +34,12 @@ export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [squad, setSquad] = useState<SquadData | null>(null)
+  
+  const [showAddActivityModal, setShowAddActivityModal] = useState(false)
+  const [selectedSport, setSelectedSport] = useState('Course à pied')
+  const [activityDistance, setActivityDistance] = useState('')
+  const [activityTime, setActivityTime] = useState('')
+
   const weeklyMissions = [
     { id: 1, sport: 'Course à pied', km: '5 km', time: '30 min', points: 300, week: 'Semaine 1' },
     { id: 2, sport: 'Vélo', km: '10 km', time: '1 h', points: 400, week: 'Semaine 1' },
@@ -255,7 +261,6 @@ export default function HomePage() {
     
     await supabase.from('squads').insert([{ name: squadNameInput.trim(), code: generatedCode }])
 
-    // On nettoie l'ancienne entrée puis on insère la nouvelle
     await supabase.from('squad_members').delete().eq('user_id', user.id)
 
     const {error} = await supabase.from('squad_members').insert([{
@@ -278,7 +283,6 @@ export default function HomePage() {
   const handleJoinSquad = async (squadToJoin: { name: string; code: string }) => {
     if (!user) return
 
-    // On nettoie l'ancienne entrée puis on insère la nouvelle
     await supabase.from('squad_members').delete().eq('user_id', user.id)
 
     const {error}= await supabase.from('squad_members').insert([{
@@ -293,7 +297,6 @@ export default function HomePage() {
       console.error("Erreur insertion squad_members :", error)
       alert("Erreur lors de la jonction : " + error.message)
       return
-
     }
 
     setSquad({ name: squadToJoin.name, code: squadToJoin.code, isAdmin: false })
@@ -454,60 +457,194 @@ export default function HomePage() {
       <main style={{ maxWidth: '700px', margin: '1rem auto 5rem auto', padding: '0 1rem' }}>
         
         {activeTab === 'podium' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            <h2 style={{ color: 'white', textAlign: 'center', margin: '0.5rem 0' }}>PODIUM DE L'ÉQUIPE</h2>
-            <div style={podiumContainerStyle}>
-              <div style={{ ...podiumStepStyle, height: '100px', backgroundColor: '#1e2942' }}>
-                <span style={{ fontSize: '1.2rem' }}>🥈</span>
-                <span style={{ fontSize: '0.8rem', color: '#8b9bb4' }}>2ème</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', alignItems: 'center', paddingTop: '1rem' }}>
+            <div style={{ textAlign: 'center' }}>
+              <span style={{ color: '#ffcc00', fontSize: '0.75rem', fontWeight: 'bold', letterSpacing: '2px' }}>CLASSEMENT GÉNÉRAL</span>
+              <h2 style={{ color: 'white', margin: '0.2rem 0 0 0', fontSize: '1.5rem' }}>PODIUM DES ÉQUIPES</h2>
+            </div>
+
+            {/* SUPER PODIUM INTER-ÉQUIPES */}
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: '12px', width: '100%', maxWidth: '420px', marginTop: '2rem', paddingBottom: '1rem' }}>
+              
+              {/* 2ème PLACE (Argent) */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px', textAlign: 'center' }}>
+                  <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#2a3b5c', border: '2px solid #c0c0c0', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '4px', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
+                    <span style={{ fontSize: '1.2rem' }}>🛡️</span>
+                  </div>
+                  <span style={{ color: 'white', fontSize: '0.8rem', fontWeight: 'bold', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Équipe Adverse 2</span>
+                  <span style={{ color: '#8b9bb4', fontSize: '0.7rem' }}>0 pts</span>
+                </div>
+                <div style={{ width: '100%', height: '110px', background: 'linear-gradient(180deg, #2a3b5c 0%, #16223f 100%)', borderRadius: '12px 12px 0 0', borderTop: '3px solid #c0c0c0', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'center', paddingTop: '12px', boxShadow: 'inset 0 4px 6px rgba(255,255,255,0.05)' }}>
+                  <span style={{ fontSize: '1.5rem' }}>🥈</span>
+                  <span style={{ color: '#c0c0c0', fontWeight: 'bold', fontSize: '1.1rem', marginTop: '4px' }}>2</span>
+                </div>
               </div>
-              <div style={{ ...podiumStepStyle, height: '140px', backgroundColor: '#ffcc00', color: '#0b1329' }}>
-                {avatarUrl ? (
-                  <img src={avatarUrl} alt="Avatar 1er" style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} />
-                ) : (
-                  <span style={{ fontSize: '1.5rem' }}>👑</span>
-                )}
-                <strong style={{ fontSize: '0.85rem', marginTop: '4px' }}>{displayName}</strong>
+
+              {/* 1ère PLACE (Or + Ton Équipe) */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1.1, zIndex: 2 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px', textAlign: 'center' }}>
+                  <div style={{ position: 'relative' }}>
+                    <span style={{ position: 'absolute', top: '-18px', left: '50%', transform: 'translateX(-50%)', fontSize: '1.2rem' }}>👑</span>
+                    <div style={{ width: '54px', height: '54px', borderRadius: '50%', backgroundColor: '#2a3b5c', border: '3px solid #ffcc00', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '4px', boxShadow: '0 6px 15px rgba(255,204,0,0.4)' }}>
+                      <span style={{ fontSize: '1.5rem' }}>🛡️</span>
+                    </div>
+                  </div>
+                  <span style={{ color: '#ffcc00', fontSize: '0.85rem', fontWeight: 'bold', maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{squad.name}</span>
+                  <span style={{ color: '#8b9bb4', fontSize: '0.7rem' }}>0 pts</span>
+                </div>
+                <div style={{ width: '100%', height: '150px', background: 'linear-gradient(180deg, #ffcc00 0%, #cc9900 100%)', borderRadius: '16px 16px 0 0', borderTop: '4px solid #fff', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '12px 4px', boxShadow: '0 10px 25px rgba(255,204,0,0.3), inset 0 4px 8px rgba(255,255,255,0.3)' }}>
+                  <span style={{ fontSize: '1.8rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}>🏆</span>
+                  
+                  <div style={{ backgroundColor: 'rgba(11, 19, 41, 0.85)', padding: '4px 8px', borderRadius: '6px', width: '90%', textAlign: 'center', border: '1px solid rgba(255,204,0,0.5)' }}>
+                    <span style={{ color: '#ffcc00', fontSize: '0.65rem', fontWeight: 'bold', letterSpacing: '0.5px', display: 'block', textTransform: 'uppercase', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {squad.name}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div style={{ ...podiumStepStyle, height: '80px', backgroundColor: '#1e2942' }}>
-                <span style={{ fontSize: '1.2rem' }}>🥉</span>
-                <span style={{ fontSize: '0.8rem', color: '#8b9bb4' }}>3ème</span>
+
+              {/* 3ème PLACE (Bronze) */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px', textAlign: 'center' }}>
+                  <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#2a3b5c', border: '2px solid #cd7f32', overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '4px', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
+                    <span style={{ fontSize: '1.2rem' }}>🛡️</span>
+                  </div>
+                  <span style={{ color: 'white', fontSize: '0.8rem', fontWeight: 'bold', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Équipe Adverse 3</span>
+                  <span style={{ color: '#8b9bb4', fontSize: '0.7rem' }}>0 pts</span>
+                </div>
+                <div style={{ width: '100%', height: '80px', background: 'linear-gradient(180deg, #2a3b5c 0%, #16223f 100%)', borderRadius: '12px 12px 0 0', borderTop: '3px solid #cd7f32', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'center', paddingTop: '10px', boxShadow: 'inset 0 4px 6px rgba(255,255,255,0.05)' }}>
+                  <span style={{ fontSize: '1.3rem' }}>🥉</span>
+                  <span style={{ color: '#cd7f32', fontWeight: 'bold', fontSize: '1rem', marginTop: '2px' }}>3</span>
+                </div>
               </div>
+
             </div>
           </div>
         )}
 
         {activeTab === 'missions' && (
-          <div style={{ ...cardStyle, padding: '1.5rem', backgroundColor: '#0b1329', color: 'white' }}>
-            <h3 style={{ color: '#ffcc00', marginBottom: '1rem', fontSize: '1.1rem' }}>🏆 Missions de la semaine</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {weeklyMissions.map((mission) => (
-                <div 
-                  key={mission.id} 
-                  style={{ 
-                    backgroundColor: '#131c35', 
-                    border: '1px solid #1e2942', 
-                    borderRadius: '8px', 
-                    padding: '0.8rem 1rem',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}
-                >
-                  <div>
-                    <h4 style={{ margin: '0 0 0.3rem 0', color: '#ffcc00', fontSize: '0.95rem' }}>{mission.sport}</h4>
-                    <p style={{ margin: 0, fontSize: '0.8rem', color: '#8b9bb4' }}>
-                      {mission.km} {mission.time !== '-' ? `• ${mission.time}` : ''}
-                    </p>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <span style={{ fontWeight: 'bold', color: '#ffcc00', fontSize: '0.95rem' }}>
-                      +{mission.points} pts
-                    </span>
-                  </div>
+            <div 
+              onClick={() => setShowAddActivityModal(true)}
+              style={{
+                background: 'linear-gradient(135deg, #ffcc00 0%, #ff9900 100%)',
+                color: '#0b1329',
+                padding: '1.2rem 1.5rem',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                boxShadow: '0 4px 15px rgba(255, 204, 0, 0.3)',
+                transition: 'transform 0.2s ease',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <span style={{ fontSize: '2rem' }}>⚡</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 'bold' }}>Ajoute ton activité</h3>
+                  <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', opacity: 0.9 }}>Enregistre tes efforts pour marquer des points</p>
                 </div>
-              ))}
+              </div>
+              <span style={{ fontSize: '1.5rem', fontWeight: 'bold', backgroundColor: 'rgba(11, 19, 41, 0.1)', width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</span>
+            </div>
+
+            <div style={{ ...cardStyle, padding: '1.5rem', backgroundColor: '#0b1329', color: 'white' }}>
+              <h3 style={{ color: '#ffcc00', marginBottom: '1rem', fontSize: '1.1rem' }}>🏆 Missions de la semaine</h3>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {weeklyMissions.map((mission) => (
+                  <div 
+                    key={mission.id} 
+                    style={{ 
+                      backgroundColor: '#131c35', 
+                      border: '1px solid #1e2942', 
+                      borderRadius: '8px', 
+                      padding: '0.8rem 1rem',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <div>
+                      <h4 style={{ margin: '0 0 0.3rem 0', color: '#ffcc00', fontSize: '0.95rem' }}>{mission.sport}</h4>
+                      <p style={{ margin: 0, fontSize: '0.8rem', color: '#8b9bb4' }}>
+                        {mission.km} {mission.time !== '-' ? `• ${mission.time}` : ''}
+                      </p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ fontWeight: 'bold', color: '#ffcc00', fontSize: '0.95rem' }}>
+                        +{mission.points} pts
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showAddActivityModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 50, padding: '1rem' }}>
+            <div style={{ backgroundColor: '#131c35', border: '1px solid #1e2942', borderRadius: '12px', width: '100%', maxWidth: '380px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ color: '#ffcc00', margin: 0, fontSize: '1.1rem' }}>Ajouter une activité</h3>
+                <button onClick={() => setShowAddActivityModal(false)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '1rem' }}>✕</button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <span style={statTitleStyle}>CHOISISSEZ LE SPORT</span>
+                <select 
+                  value={selectedSport} 
+                  onChange={(e) => setSelectedSport(e.target.value)}
+                  style={{ ...inputStyle, width: '100%' }}
+                >
+                  <option value="Course à pied">Course à pied</option>
+                  <option value="Vélo">Vélo</option>
+                  <option value="Natation">Natation</option>
+                  <option value="Marche">Marche</option>
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <span style={statTitleStyle}>DISTANCE (KM)</span>
+                <input 
+                  type="number" 
+                  placeholder="Ex: 5.5"
+                  value={activityDistance}
+                  onChange={(e) => setActivityDistance(e.target.value)}
+                  style={{ ...inputStyle, width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <span style={statTitleStyle}>TEMPS (MINUTES)</span>
+                <input 
+                  type="number" 
+                  placeholder="Ex: 30"
+                  value={activityTime}
+                  onChange={(e) => setActivityTime(e.target.value)}
+                  style={{ ...inputStyle, width: '100%' }}
+                />
+              </div>
+
+              <button 
+                onClick={() => {
+                  if (!activityDistance && !activityTime) {
+                    alert("Veuillez renseigner au moins la distance ou le temps !")
+                    return
+                  }
+                  alert(`Activité enregistrée : ${selectedSport} - ${activityDistance || 0} km, ${activityTime || 0} min`)
+                  setShowAddActivityModal(false)
+                  setActivityDistance('')
+                  setActivityTime('')
+                }}
+                style={{ ...primaryBtnStyle, marginTop: '0.5rem' }}
+              >
+                Valider l'activité
+              </button>
             </div>
           </div>
         )}
@@ -881,8 +1018,6 @@ const containerStyle: React.CSSProperties = { backgroundColor: '#0b1329', color:
 const headerStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem', backgroundColor: '#131c35', borderBottom: '1px solid #1e2942' }
 const cardStyle: React.CSSProperties = { backgroundColor: '#131c35', padding: '1.5rem', borderRadius: '12px', border: '1px solid #1e2942' }
 const logoutButtonStyle: React.CSSProperties = { padding: '0.5rem 1rem', backgroundColor: 'transparent', color: '#ff4d4f', border: '1px solid #ff4d4f', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }
-const podiumContainerStyle: React.CSSProperties = { display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: '0.5rem', margin: '1rem 0' }
-const podiumStepStyle: React.CSSProperties = { width: '80px', borderRadius: '8px 8px 0 0', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }
 const statTitleStyle: React.CSSProperties = { color: '#8b9bb4', fontSize: '0.7rem', letterSpacing: '1px' }
 const primaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: '#ffcc00', color: '#0b1329', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
 const secondaryBtnStyle: React.CSSProperties = { padding: '0.8rem', backgroundColor: 'transparent', color: '#ffcc00', border: '1px solid #ffcc00', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }
